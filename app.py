@@ -216,6 +216,181 @@ def delete_customer(phone):
     conn.commit()
     conn.close()
     return jsonify({'message': 'Customer deleted successfully.'})
+@app.route('/api/orders', methods=['POST'])
+def checkout():
+    data = request.json or {}
+    user_id = data.get('userId')
+    customer_id = data.get('customerId')
+    cart_items = data.get('cartItems', [])
+    
+    if not user_id or not cart_items:
+        return jsonify({'message': 'Cashier User ID and cart items are required.'}), 400
+        
+    try:
+        user_id_int = int(user_id)
+        cust_id_val = int(customer_id) if customer_id else None
+    except ValueError:
+        return jsonify({'message': 'Invalid IDs.'}), 400
+        
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        conn.execute('BEGIN')
+        
+        total_amount = 0
+        validated_items = []
+        
+        for item in cart_items:
+            product_id = item.get('productId')
+            quantity = item.get('quantity')
+            
+            if not product_id or not quantity or quantity <= 0:
+                raise ValueError("Invalid item format in cart.")
+                
+            cursor.execute('SELECT Name, Price, StockQty FROM Product WHERE ProductID = ?', (product_id,))
+            prod = cursor.fetchone()
+            if not prod:
+                raise ValueError(f"Product ID {product_id} not found.")
+                
+            if prod['StockQty'] < quantity:
+                raise ValueError(f"Insufficient stock for {prod['Name']}. Available: {prod['StockQty']}, Requested: {quantity}")
+                
+            item_total = prod['Price'] * quantity
+            total_amount += item_total
+            validated_items.append({
+                'productId': product_id,
+                'quantity': quantity,
+                'unitPrice': prod['Price'],
+                'name': prod['Name']
+            })
+            
+        order_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        cursor.execute('''
+            INSERT INTO Orders (UserID, CustomerID, TotalAmount, OrderDate)
+            VALUES (?, ?, ?, ?)
+        ''', (user_id_int, cust_id_val, total_amount, order_date))
+        order_id = cursor.lastrowid
+        
+        for vi in validated_items:
+            cursor.execute('''
+                INSERT INTO OrderItem (OrderID, ProductID, Quantity, UnitPrice)
+                VALUES (?, ?, ?, ?)
+            ''', (order_id, vi['productId'], vi['quantity'], vi['unitPrice']))
+            
+            cursor.execute('''
+                UPDATE Product 
+                SET StockQty = StockQty - ? 
+                WHERE ProductID = ?
+            ''', (vi['quantity'], vi['productId']))
+            
+        if cust_id_val:
+            points_earned = int(total_amount // 1)
+            if points_earned > 0:
+                cursor.execute('''
+                    UPDATE Customerservice 
+                    SET LoyaltyPoints = LoyaltyPoints + ? 
+                    WHERE CustomerID = ?
+                ''', (points_earned, cust_id_val))
+                
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Order processed successfully.',
+            'orderId': order_id,
+            'totalAmount': total_amount,
+            'orderDate': order_date
+        }), 201
+        
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        return jsonify({'message': str(e)}), 400
+@app.route('/api/sales/overview', methods=['GET'])
+def get_sales_overview():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('SELECT SUM(TotalAmount) FROM Orders')
+    total_sales = cursor.fetchone()[0] or 0.0
+    
+    cursor.execute('SELECT COUNT(*) FROM Orders')
+    total_invoices = cursor.fetchone()[0] or 0
+    
+    cursor.execute('SELECT COUNT(*) FROM Customerservice')
+    total_customers = cursor.fetchone()[0] or 0
+    
+    conn.close()
+    return jsonify({
+        'totalSales': total_sales,
+        'totalInvoices': total_invoices,
+        'totalCustomers': total_customers
+    })
+@app.route('/api/sales/recent', methods=['GET'])
+def get_recent_sales():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        SELECT 
+            o.OrderID AS invoiceId,
+            u.Name AS cashierName,
+            o.OrderDate AS date,
+            o.TotalAmount AS totalAmount
+        FROM Orders o
+        JOIN User u ON o.UserID = u.UserID
+        ORDER BY o.OrderDate DESC
+        LIMIT 10
+    ''')
+    recent_sales = [row_to_dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return jsonify(recent_sales)
+@app.route('/api/sales/invoice/<int:invoice_id>', methods=['GET'])
+def get_invoice(invoice_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        SELECT 
+            o.OrderID AS invoiceId,
+            o.TotalAmount AS totalAmount,
+            o.OrderDate AS date,
+            u.Name AS cashierName,
+            u.UserID AS cashierId,
+            c.Name AS customerName,
+            c.PhoneNumber AS customerPhone
+        FROM Orders o
+        JOIN User u ON o.UserID = u.UserID
+        LEFT JOIN Customerservice c ON o.CustomerID = c.CustomerID
+        WHERE o.OrderID = ?
+    ''', (invoice_id,))
+    
+    order = cursor.fetchone()
+    if not order:
+        conn.close()
+        return jsonify({'message': 'Invoice not found.'}), 404
+        
+    cursor.execute('''
+        SELECT 
+            oi.ProductID AS productId,
+            p.Name AS name,
+            oi.Quantity AS quantity,
+            oi.UnitPrice AS unitPrice,
+            (oi.Quantity * oi.UnitPrice) AS subtotal
+        FROM OrderItem oi
+        JOIN Product p ON oi.ProductID = p.ProductID
+        WHERE oi.OrderID = ?
+    ''', (invoice_id,))
+    
+    items = [row_to_dict(item) for item in cursor.fetchall()]
+    conn.close()
+    
+    return jsonify({
+        'invoice': row_to_dict(order),
+        'items': items
+    })
 @app.route('/api/exchange-rate', methods=['GET'])
 def get_exchange_rate():
     

@@ -513,3 +513,338 @@ function renderReceiptModal(data) {
 function closeReceiptModal() {
     document.getElementById('receipt-modal').classList.remove('active');
 }
+
+async function loadAdminView() {
+
+    cancelProductEdit();
+    document.getElementById('customer-register-form').reset();
+
+    await loadAdminProducts();
+    await loadAdminCustomers();
+}
+async function loadAdminProducts() {
+    const q = document.getElementById('admin-product-search').value.trim();
+    try {
+        const response = await fetch(`${API_BASE_URL}/products?q=${encodeURIComponent(q)}`);
+        const products = await response.json();
+        state.products = products;
+
+        const tbody = document.getElementById('admin-products-tbody');
+        tbody.innerHTML = '';
+
+        if (products.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted">No products found in the database.</td></tr>`;
+            return;
+        }
+
+        products.forEach(p => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td><strong>${p.ProductID}</strong></td>
+                <td>${escapeHTML(p.Name)}</td>
+                <td title="${escapeHTML(p.Description || '')}">${escapeHTML(p.Description || '-')}</td>
+                <td>€ ${p.Price.toFixed(2)}</td>
+                <td>
+                    <span class="badge ${p.StockQty <= 5 ? 'btn-danger' : 'primary'}">
+                        Qty: ${p.StockQty}
+                    </span>
+                </td>
+                <td>
+                    <button type="button" class="btn-text" onclick="editProduct(${p.ProductID})"><i class="fa-solid fa-pen"></i> Edit</button>
+                    <button type="button" class="btn-text error-text" onclick="deleteProduct(${p.ProductID})"><i class="fa-solid fa-trash"></i> Delete</button>
+                </td>
+            `;
+            tbody.appendChild(tr);
+        });
+    } catch (error) {
+        console.error('Error fetching admin products:', error);
+    }
+}
+
+async function handleProductSubmit(event) {
+    event.preventDefault();
+
+    const id = document.getElementById('product-id-field').value;
+    const name = document.getElementById('product-name').value.trim();
+    const description = document.getElementById('product-desc').value.trim();
+    const price = parseFloat(document.getElementById('product-price').value);
+    const stockQty = parseInt(document.getElementById('product-stock').value);
+
+    const isEdit = id !== '';
+    const url = isEdit ? `${API_BASE_URL}/products/${id}` : `${API_BASE_URL}/products`;
+    const method = isEdit ? 'PUT' : 'POST';
+
+    try {
+        const response = await fetch(url, {
+            method: method,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, description, price, stockQty })
+        });
+
+        const data = await response.json();
+        if (response.ok) {
+            alert(isEdit ? 'Product updated successfully.' : 'Product created successfully.');
+            cancelProductEdit();
+            loadAdminProducts();
+        } else {
+            alert(data.message || 'Error executing request.');
+        }
+    } catch (error) {
+        alert('Server communication error.');
+    }
+}
+function editProduct(productId) {
+    const prod = state.products.find(p => p.ProductID === productId);
+    if (!prod) return;
+
+    document.getElementById('product-id-field').value = prod.ProductID;
+    document.getElementById('product-name').value = prod.Name;
+    document.getElementById('product-desc').value = prod.Description || '';
+    document.getElementById('product-price').value = prod.Price;
+    document.getElementById('product-stock').value = prod.StockQty;
+
+    document.getElementById('product-form-title').innerText = `Edit Product #${prod.ProductID}`;
+    document.getElementById('product-submit-btn').innerHTML = `<i class="fa-solid fa-circle-check"></i> <span>Update Product</span>`;
+    document.getElementById('cancel-edit-btn').classList.remove('hidden');
+
+    document.getElementById('product-name').focus();
+}
+function cancelProductEdit() {
+    document.getElementById('product-crud-form').reset();
+    document.getElementById('product-id-field').value = '';
+
+    document.getElementById('product-form-title').innerText = 'Add New Product';
+    document.getElementById('product-submit-btn').innerHTML = `<i class="fa-solid fa-plus"></i> <span>Add Product</span>`;
+    document.getElementById('cancel-edit-btn').classList.add('hidden');
+}
+async function deleteProduct(productId) {
+    if (!confirm('Are you sure you want to delete this product? This action is permanent.')) return;
+
+    try {
+        const response = await fetch(`${API_BASE_URL}/products/${productId}`, {
+            method: 'DELETE'
+        });
+
+        const data = await response.json();
+        if (response.ok) {
+            alert('Product deleted successfully.');
+            loadAdminProducts();
+        } else {
+            alert(data.message || 'Could not delete product.');
+        }
+    } catch (error) {
+        alert('Network error.');
+    }
+}
+
+async function loadAdminCustomers() {
+    const phone = document.getElementById('admin-customer-search').value.trim();
+    try {
+        const response = await fetch(`${API_BASE_URL}/customers?phone=${encodeURIComponent(phone)}`);
+        const customers = await response.json();
+
+        const tbody = document.getElementById('admin-customers-tbody');
+        tbody.innerHTML = '';
+
+        if (customers.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="5" class="text-center text-muted">No loyalty program members.</td></tr>`;
+            return;
+        }
+
+        customers.forEach(c => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td><strong>${c.id}</strong></td>
+                <td>${escapeHTML(c.name)}</td>
+                <td>${escapeHTML(c.phoneNumber)}</td>
+                <td>${c.loyaltyPoints} Points</td>
+                <td>
+                    <button type="button" class="btn-text error-text" onclick="deleteCustomer('${c.phoneNumber}')">
+                        <i class="fa-solid fa-trash"></i> Delete
+                    </button>
+                </td>
+            `;
+            tbody.appendChild(tr);
+        });
+    } catch (error) {
+        console.error('Error fetching customers:', error);
+    }
+}
+async function handleCustomerSubmit(event, sourcePanel) {
+    event.preventDefault();
+
+    const name = document.getElementById('customer-name').value.trim();
+    const phoneNumber = document.getElementById('customer-phone').value.trim();
+
+    try {
+
+        const existingRes = await fetch(`${API_BASE_URL}/customers?phone=${encodeURIComponent(phoneNumber)}`);
+        const existing = await existingRes.json();
+        if (existing.some(c => c.phoneNumber === phoneNumber)) {
+            alert('A customer with this contact number already exists. Not stored again.');
+            return;
+        }
+
+        const response = await fetch(`${API_BASE_URL}/customers`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, phoneNumber, loyaltyPoints: 0 })
+        });
+
+        const data = await response.json();
+        if (response.ok) {
+            alert('Customer registered successfully. Loyalty points will accrue automatically on purchases.');
+            document.getElementById('customer-register-form').reset();
+            loadAdminCustomers();
+        } else {
+            alert(data.message || 'Error registering member.');
+        }
+    } catch (error) {
+        alert('Server transaction failed.');
+    }
+}
+async function deleteCustomer(phone) {
+    if (!confirm('Are you sure you want to remove this loyalty member?')) return;
+
+    try {
+        const response = await fetch(`${API_BASE_URL}/customers/${phone}`, {
+            method: 'DELETE'
+        });
+
+        const data = await response.json();
+        if (response.ok) {
+            alert('Customer removed.');
+            loadAdminCustomers();
+        } else {
+            alert(data.message || 'Could not delete member.');
+        }
+    } catch (error) {
+        alert('Network error.');
+    }
+}
+
+async function loadOwnerView() {
+    document.getElementById('owner-invoice-search').value = '';
+
+    await loadOwnerOverviewStats();
+    await loadOwnerRecentSales();
+    await loadOwnerCustomersList();
+}
+async function loadOwnerOverviewStats() {
+    try {
+        const response = await fetch(`${API_BASE_URL}/sales/overview`);
+        const stats = await response.json();
+
+        document.getElementById('owner-total-sales').innerText = `€ ${stats.totalSales.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        document.getElementById('owner-total-invoices').innerText = stats.totalInvoices;
+        document.getElementById('owner-total-customers').innerText = stats.totalCustomers;
+    } catch (error) {
+        console.error('Error fetching sales statistics:', error);
+    }
+}
+async function loadOwnerRecentSales() {
+    try {
+        const response = await fetch(`${API_BASE_URL}/sales/recent`);
+        state.recentSales = await response.json();
+        renderOwnerSalesTable(state.recentSales);
+    } catch (error) {
+        console.error('Error loading recent sales:', error);
+    }
+}
+function renderOwnerSalesTable(sales) {
+    const tbody = document.getElementById('owner-sales-tbody');
+    tbody.innerHTML = '';
+
+    if (sales.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="5" class="text-center text-muted">No sales invoices found.</td></tr>`;
+        return;
+    }
+
+    sales.forEach(sale => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td><strong>#${sale.invoiceId}</strong></td>
+            <td>${escapeHTML(sale.cashierName)}</td>
+            <td>${sale.date}</td>
+            <td><strong>€ ${sale.totalAmount.toFixed(2)}</strong></td>
+            <td>
+                <button type="button" class="btn-primary" style="padding: 4px 10px; font-size: 0.8rem;" onclick="loadReceipt(${sale.invoiceId})">
+                    <i class="fa-solid fa-file-invoice"></i> View Receipt
+                </button>
+            </td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
+
+async function filterInvoices() {
+    const searchVal = document.getElementById('owner-invoice-search').value.trim();
+
+    if (!searchVal) {
+        renderOwnerSalesTable(state.recentSales);
+        return;
+    }
+
+    const invoiceId = parseInt(searchVal);
+    if (isNaN(invoiceId)) {
+        renderOwnerSalesTable([]);
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_BASE_URL}/sales/invoice/${invoiceId}`);
+        if (response.ok) {
+            const data = await response.json();
+            const formattedSale = {
+                invoiceId: data.invoice.invoiceId,
+                cashierName: data.invoice.cashierName,
+                date: data.invoice.date,
+                totalAmount: data.invoice.totalAmount
+            };
+            renderOwnerSalesTable([formattedSale]);
+        } else {
+            renderOwnerSalesTable([]);
+        }
+    } catch (error) {
+        renderOwnerSalesTable([]);
+    }
+}
+async function loadOwnerCustomersList() {
+    try {
+        const response = await fetch(`${API_BASE_URL}/customers`);
+        const customers = await response.json();
+
+        const tbody = document.getElementById('owner-customers-tbody');
+        tbody.innerHTML = '';
+
+        if (customers.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="3" class="text-center text-muted">No customers.</td></tr>`;
+            return;
+        }
+
+        customers.slice(0, 10).forEach(c => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td>${escapeHTML(c.name)}</td>
+                <td>${escapeHTML(c.phoneNumber)}</td>
+                <td><strong class="primary-text">${c.loyaltyPoints}</strong></td>
+            `;
+            tbody.appendChild(tr);
+        });
+    } catch (error) {
+        console.error('Error fetching customer overview list:', error);
+    }
+}
+
+function escapeHTML(str) {
+    if (!str) return '';
+    return str.replace(/[&<>'"]/g,
+        tag => ({
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            "'": '&#39;',
+            '"': '&quot;'
+        }[tag] || tag)
+    );
+}
