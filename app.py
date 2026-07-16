@@ -216,6 +216,39 @@ def delete_customer(phone):
     conn.commit()
     conn.close()
     return jsonify({'message': 'Customer deleted successfully.'})
-
+@app.route('/api/exchange-rate', methods=['GET'])
+def get_exchange_rate():
+    
+    default_rates = {
+        "USD": 1.08,
+        "GBP": 0.85,
+        "PKR": 303.00,
+        "SAR": 4.05,
+        "AED": 3.97
+    }
+    
+    try:
+        req = urllib.request.Request(
+            'https://open.er-api.com/v6/latest/EUR',
+            headers={'User-Agent': 'Mozilla/5.0'}
+        )
+        with urllib.request.urlopen(req, timeout=3) as response:
+            data = json.loads(response.read().decode())
+            if data and data.get('result') == 'success':
+                rates = data.get('rates', {})
+                filtered_rates = {cur: rates[cur] for cur in default_rates.keys() if cur in rates}
+                return jsonify({
+                    'success': True,
+                    'source': 'live',
+                    'rates': filtered_rates
+                })
+    except Exception as e:
+        pass
+        
+    return jsonify({
+        'success': True,
+        'source': 'fallback',
+        'rates': default_rates
+    })
 if __name__ == '__main__':
     app.run(host='127.0.0.1', port=5000, debug=True)
